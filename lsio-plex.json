@@ -1,0 +1,153 @@
+{
+    "Description": "A running environment for Plex Media Server",
+
+    "Parameters": {
+
+        "PlexInstanceType": {
+            "Type": "String",
+            "Default": "t2.micro",
+            "AllowedValues": [ "t2.micro", "t2.small", "t2.medium", "t2.large", "m4.large" ]
+        },
+
+        "PlexInstanceImageId": {
+            "Type": "String",
+            "Default": "ami-d7b9a2b1",
+            "Description": "The base image that the instance will created from"
+        },
+
+        "AccountVPCId": {
+            "Type": "String",
+            "Description": "Choose the VPC that is linked to your chosen subnet. Either your own, or the AWS auto-generated default VPC."
+        },
+
+        "AccountSubnet": {
+            "Type": "String",
+            "Description": "Use one of the public subnets allocated to your account (make sure it's in the same availability zone)."
+        },
+
+        "AvailabilityZone": {
+            "Type": "String",
+            "Description": "Where you want the instance and volume to be",
+            "AllowedValues": [ "eu-west-1a", "eu-west-1b", "eu-west-1c" ]
+        }
+    },
+
+    "Resources": {
+
+        "LsioPlexServerInstance": {
+            "Type": "AWS::EC2::Instance",
+            "DependsOn": [ "LsioPlexServerFirewallRules", "LsioPlexServerStorageVolume" ],
+            "Properties": {
+                "ImageId": { "Ref": "PlexInstanceImageId" },
+                "InstanceType": { "Ref": "PlexInstanceType" },
+                "KeyName": "LsioPlexServer",
+                "AvailabilityZone": {
+                    "Ref": "AvailabilityZone"
+                },
+                "NetworkInterfaces": [
+                    {
+                        "AssociatePublicIpAddress": true,
+                        "DeviceIndex": 0,
+                        "SubnetId": { "Ref": "AccountSubnet" },
+                        "GroupSet": [
+                            {
+                                "Ref": "LsioPlexServerFirewallRules"
+                            }
+                        ]
+                    }
+                ],
+                "Volumes": [
+                    {
+                        "Device": "/dev/sdk",
+                        "VolumeId": {
+                            "Ref": "LsioPlexServerStorageVolume"
+                        }
+                    }
+                ],
+                "UserData": {
+                    "Fn::Base64": {
+                        "Fn::Join": [
+                            "\n",
+                            [
+                                "#!/bin/bash -v",
+                                "fstype=`file -s /dev/xvdk`",
+                                "if [ \"$fstype\" == \"/dev/xvdk: data\" ]",
+                                "then",
+                                "    mkfs -t ext4 /dev/sdk",
+                                "fi",
+                                "mkdir -p /data/plex",
+                                "mkdir -p /data/media",
+                                "chmod 750 /data/plex",
+                                "chmod 750 /data/media",
+                                "mount /dev/sdk /data/media",
+                                "mkdir -p /data/media/movies",
+                                "mkdir -p /data/media/tv",
+                                "chmod -R 750 /data/media",
+                                "chown -R ec2-user:ec2-user /data/media",
+                                "chown -R ec2-user:ec2-user /data/plex",
+                                "echo \"/dev/sdk /data/media ext4 defaults,nofail 0 2\" >> /etc/fstab",
+                                "sudo yum update -y",
+                                "sudo yum install -y docker",
+                                "sudo service docker start",
+                                "sudo usermod -a -G docker ec2-user",
+                                "docker create --name=plex --net=host -e VERSION=latest -e PUID=$(id -u ec2-user) -e PGID=$(id -g ec2-user) -v /data/plex:/config -v /data/media/tv:/data/tvshows -v /data/media/movies:/data/movies --restart=always linuxserver/plex",
+                                "docker start plex"
+                            ]
+                        ]
+                    }
+                }
+            }
+        },
+
+        "LsioPlexServerStorageVolume": {
+            "Type": "AWS::EC2::Volume",
+            "Properties": {
+                "Size": "20",
+                "VolumeType": "gp2",
+                "AvailabilityZone": {
+                    "Ref": "AvailabilityZone"
+                }
+            }
+        },
+
+        "LsioPlexServerFirewallRules": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupName": "LsioPlexServerFirewallRules",
+                "GroupDescription": "Restrict inbound access only to the Plex and SSH ports",
+                "VpcId": {
+                    "Ref": "AccountVPCId"
+                },
+                "SecurityGroupEgress": [
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "IpProtocol": "-1"
+                    }
+                ],
+                "SecurityGroupIngress": [
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22"
+                    },
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "IpProtocol": "tcp",
+                        "FromPort": "32400",
+                        "ToPort": "32400"
+                    }
+                ]
+            }
+        }
+    },
+
+    "Outputs": {
+
+        "LsioPlexMediaServerPublicIpAddress": {
+            "Value": {
+                "Fn::GetAtt": [ "LsioPlexServerInstance", "PublicIp" ]
+            }
+        }
+    }
+}
